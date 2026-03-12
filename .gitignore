@@ -3,3 +3,8 @@ __pycache__
 .env
 *.egg-info
 .venv
+clips/*.mp4
+clips/*.mkv
+clips/*.avi
+clips/*.webm
+clips/*.mov

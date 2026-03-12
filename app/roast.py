@@ -1,7 +1,5 @@
-"""Face detection + Gemini AI roast overlay."""
+"""Face detection + Gemini AI roast overlay — Casino Royale Bond villain vibe."""
 
-import io
-import os
 import random
 import threading
 import time
@@ -11,26 +9,30 @@ import numpy as np
 from PIL import Image
 
 ROAST_PROMPT = (
-    "You are a comedy roast AI at a fun house party. Look at this person and "
-    "give a short, funny, lighthearted roast (1-2 sentences max). Be playful "
-    "and witty, not mean-spirited or offensive. Focus on their expression, "
-    "vibe, or energy. Keep it PG-13 and party-appropriate. Be creative and "
-    "specific to what you see. Do NOT use markdown formatting."
+    "You are an AI with the suave, cutting wit of a James Bond villain at a Casino Royale "
+    "party. Look at this person and deliver a short, devastatingly funny roast (1-2 sentences max). "
+    "Channel the elegant menace of Le Chiffre, the theatrical flair of Goldfinger, or the cold "
+    "charm of Silva. Be witty and sharp like Bond himself would be. Reference casino, spy, or "
+    "007 themes when it fits naturally. Keep it PG-13 and party-appropriate — playful not cruel. "
+    "Be specific to what you see in the image. Do NOT use markdown formatting."
 )
 
 FALLBACK_ROASTS = [
-    "You look like you googled 'how to look cool' and hit 'I'm Feeling Lucky'.",
-    "Your vibe says 'just got here' but your face says 'been through it'.",
-    "Main character energy... of a background extra.",
-    "You've got the confidence of someone who hasn't checked a mirror today.",
-    "Even autocorrect wouldn't know what to do with that expression.",
-    "You look like you peaked in a dream once.",
-    "That's the face of someone who microwaves water for tea.",
-    "You look like your spirit animal is a confused golden retriever.",
-    "Giving strong 'reply-all to the whole company' energy right now.",
-    "You look like you'd lose a staring contest with a potato.",
-    "Your face is giving 'terms and conditions I didn't read'.",
-    "You look like the human equivalent of a participation trophy.",
+    "I'd tell you the odds of looking that confused, but like Le Chiffre, I never reveal my cards.",
+    "You have the confidence of a Bond villain... right before the third act.",
+    "Shaken, not stirred — which is also how I'd describe your outfit choices tonight.",
+    "M would classify that face as a threat to national morale.",
+    "You look like you'd lose at poker even with Q feeding you the answers.",
+    "The name's Bland. James Bland.",
+    "MI6 called — they want their most average-looking agent back.",
+    "You've got the vibe of a henchman who gets taken out in the pre-title sequence.",
+    "Even Jaws had a better smile than that.",
+    "You look like you'd order a martini and then ask for a straw.",
+    "Double-O-Seven out of ten. And that's being generous, darling.",
+    "I've seen better poker faces on a Tamagotchi.",
+    "Your entrance had all the subtlety of an Aston Martin through a brick wall.",
+    "You look like the kind of person who'd accidentally activate the ejector seat.",
+    "Moneypenny would swipe left.",
 ]
 
 
@@ -49,7 +51,6 @@ class RoastEngine:
             cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         )
 
-        # State
         self._current_roast = ""
         self._roast_until = 0.0
         self._last_roast = 0.0
@@ -58,7 +59,6 @@ class RoastEngine:
         self._cooldown = 8.0
         self._display_dur = 7.0
 
-    # ------------------------------------------------------------------
     def process(self, frame: np.ndarray, t: float) -> np.ndarray:
         result = frame.copy()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -68,12 +68,19 @@ class RoastEngine:
         now = time.time()
 
         for (x, y, w, h) in faces:
-            cv2.rectangle(result, (x, y), (x + w, y + h), (0, 255, 255), 2)
+            # Bond-style gold targeting rectangle
+            cv2.rectangle(result, (x, y), (x + w, y + h), (0, 200, 255), 2)
+            # Corner accents
+            s = 15
+            for dx, dy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
+                cx = x if dx < 0 else x + w
+                cy = y if dy < 0 else y + h
+                cv2.line(result, (cx, cy), (cx + dx * s, cy), (0, 200, 255), 2)
+                cv2.line(result, (cx, cy), (cx, cy + dy * s), (0, 200, 255), 2)
             if self._analysing:
                 scan_y = y + int((now - self._analyse_start) * 120) % h
                 cv2.line(result, (x, scan_y), (x + w, scan_y), (0, 255, 0), 2)
 
-        # Trigger new roast?
         if (
             len(faces) > 0
             and not self._analysing
@@ -92,7 +99,6 @@ class RoastEngine:
             self._analyse_start = now
             threading.Thread(target=self._fetch_roast, args=(crop,), daemon=True).start()
 
-        # Draw overlay
         if now < self._roast_until and self._current_roast:
             self._draw_roast(result, self._current_roast)
         elif self._analysing:
@@ -100,7 +106,6 @@ class RoastEngine:
 
         return result
 
-    # ------------------------------------------------------------------
     def _fetch_roast(self, face_crop: np.ndarray):
         try:
             if self._client:
@@ -111,7 +116,7 @@ class RoastEngine:
                 )
                 self._current_roast = response.text.strip()
             else:
-                time.sleep(1.5)  # fake "thinking" delay
+                time.sleep(1.5)
                 self._current_roast = random.choice(FALLBACK_ROASTS)
         except Exception as exc:
             print(f"[roast] API error: {exc}")
@@ -121,16 +126,18 @@ class RoastEngine:
         self._last_roast = time.time()
         self._roast_until = time.time() + self._display_dur
 
-    # ------------------------------------------------------------------
     @staticmethod
     def _draw_roast(frame: np.ndarray, text: str):
         h, w = frame.shape[:2]
-        # Semi-transparent bar
         overlay = frame.copy()
+        # Dark bar with gold top line
         cv2.rectangle(overlay, (0, h - 130), (w, h), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-        # Word-wrap
+        cv2.line(frame, (0, h - 130), (w, h - 130), (0, 180, 220), 2)
+        # 007 badge
         font = cv2.FONT_HERSHEY_SIMPLEX
+        cv2.putText(frame, "007", (w - 70, h - 105), font, 0.6, (0, 180, 220), 2, cv2.LINE_AA)
+        # Word-wrap
         scale = 0.75
         max_w = w - 40
         words = text.split()
@@ -146,18 +153,17 @@ class RoastEngine:
                 cur = word
         if cur:
             lines.append(cur)
-        # Draw last 3 lines
         for i, line in enumerate(lines[-3:]):
             y = h - 90 + i * 35
             cv2.putText(frame, line, (22, y), font, scale, (0, 0, 0), 3, cv2.LINE_AA)
-            cv2.putText(frame, line, (20, y), font, scale, (0, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(frame, line, (20, y), font, scale, (0, 220, 255), 2, cv2.LINE_AA)
 
     @staticmethod
     def _draw_scanning(frame: np.ndarray):
         h, w = frame.shape[:2]
-        txt = "SCANNING..."
+        txt = "IDENTIFYING TARGET..."
         font = cv2.FONT_HERSHEY_SIMPLEX
-        sz = cv2.getTextSize(txt, font, 1.2, 2)[0]
+        sz = cv2.getTextSize(txt, font, 1.0, 2)[0]
         x = (w - sz[0]) // 2
-        cv2.putText(frame, txt, (x + 2, h - 38), font, 1.2, (0, 0, 0), 4, cv2.LINE_AA)
-        cv2.putText(frame, txt, (x, h - 40), font, 1.2, (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.putText(frame, txt, (x + 2, h - 38), font, 1.0, (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.putText(frame, txt, (x, h - 40), font, 1.0, (0, 200, 255), 2, cv2.LINE_AA)

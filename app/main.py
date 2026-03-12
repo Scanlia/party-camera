@@ -1,8 +1,10 @@
 import asyncio
 import os
+import subprocess
 import time
 import threading
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -13,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from effects import EffectEngine
 from patterns import PatternEngine
 from roast import RoastEngine
+from clips import ClipPlayer
 
 
 # ---------------------------------------------------------------------------
@@ -22,6 +25,7 @@ class FrameBuffer:
     def __init__(self):
         self._input = None
         self._output_jpeg = None
+        self._output_raw = None
         self._lock = threading.Lock()
         self._new_frame = threading.Event()
         self.last_input_time = 0
@@ -40,13 +44,18 @@ class FrameBuffer:
 
     def set_output(self, frame: np.ndarray):
         with self._lock:
-            _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             self._output_jpeg = jpeg.tobytes()
+            self._output_raw = frame
             self._new_frame.set()
 
     def get_output_jpeg(self) -> bytes | None:
         with self._lock:
             return self._output_jpeg
+
+    def get_output_raw(self) -> np.ndarray | None:
+        with self._lock:
+            return self._output_raw.copy() if self._output_raw is not None else None
 
     def wait_for_frame(self, timeout: float = 1.0) -> bool:
         result = self._new_frame.wait(timeout)
@@ -61,22 +70,27 @@ CAMERA_EFFECTS = [
     "none", "roast", "neon_edges", "kaleidoscope", "color_cycle",
     "feedback", "wave_warp", "thermal", "rgb_glitch", "vhs",
     "deep_fry", "swirl", "mirror_quad", "dreamscape", "comic", "pixelate",
+    # Bond effects
+    "gun_barrel", "golden_eye", "casino_hud", "silhouette", "martini_vision",
+    "tuxedo", "blood_drip",
 ]
 
 PATTERN_TYPES = [
     "plasma", "hypnotic", "fire", "lava_lamp", "tunnel",
     "fractal_spin", "rainbow_wave", "aurora", "wormhole",
+    # Bond patterns
+    "gun_barrel_pattern", "golden_rings", "casino_felt",
 ]
 
 
 class AppState:
     def __init__(self):
-        self.mode = "pattern"          # "camera" | "pattern"
+        self.mode = "pattern"          # "camera" | "pattern" | "clips"
         self.camera_effect = "none"
         self.pattern_type = "plasma"
         self.intensity = 0.7
         self.speed = 1.0
-        self.auto_cycle = False
+        self.auto_cycle = True
         self.auto_cycle_interval = 15  # seconds
         self.blackout = False
         self.width = int(os.environ.get("STREAM_WIDTH", 1280))
@@ -103,6 +117,7 @@ state = AppState()
 effect_engine: EffectEngine | None = None
 pattern_engine: PatternEngine | None = None
 roast_engine: RoastEngine | None = None
+clip_player: ClipPlayer | None = None
 
 
 def _text_frame(text: str, sub: str = "") -> np.ndarray:
@@ -120,24 +135,92 @@ def _text_frame(text: str, sub: str = "") -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# RTSP output via FFmpeg
+# ---------------------------------------------------------------------------
+class RTSPStreamer:
+    def __init__(self, url: str, width: int, height: int, fps: int):
+        self._url = url
+        self._w = width
+        self._h = height
+        self._fps = fps
+        self._proc: subprocess.Popen | None = None
+
+    def start(self):
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-f", "rawvideo",
+            "-vcodec", "rawvideo",
+            "-pix_fmt", "bgr24",
+            "-s", f"{self._w}x{self._h}",
+            "-r", str(self._fps),
+            "-i", "-",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-tune", "zerolatency",
+            "-b:v", "4000k",
+            "-maxrate", "4500k",
+            "-bufsize", "1000k",
+            "-g", str(self._fps),
+            "-f", "rtsp",
+            "-rtsp_transport", "tcp",
+            self._url,
+        ]
+        self._proc = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        print(f"[rtsp] FFmpeg streaming to {self._url}")
+
+    def send_frame(self, frame: np.ndarray):
+        if self._proc and self._proc.stdin:
+            try:
+                self._proc.stdin.write(frame.tobytes())
+            except BrokenPipeError:
+                print("[rtsp] FFmpeg pipe broken, restarting...")
+                self.stop()
+                time.sleep(1)
+                self.start()
+
+    def stop(self):
+        if self._proc:
+            try:
+                self._proc.stdin.close()
+            except Exception:
+                pass
+            self._proc.terminate()
+            self._proc = None
+
+
+# ---------------------------------------------------------------------------
 # Processing loop (runs in background thread)
 # ---------------------------------------------------------------------------
-def _processing_loop():
-    target_fps = int(os.environ.get("TARGET_FPS", 25))
+def _processing_loop(rtsp: RTSPStreamer | None):
+    target_fps = int(os.environ.get("TARGET_FPS", 60))
     frame_time = 1.0 / target_fps
     t = 0.0
     last_cycle = time.time()
-    cycle_idx = 0
+    cam_cycle_idx = 0
+    pat_cycle_idx = 0
 
     while True:
         loop_start = time.time()
         try:
             if state.blackout:
-                buf.set_output(np.zeros((state.height, state.width, 3), dtype=np.uint8))
+                frame = np.zeros((state.height, state.width, 3), dtype=np.uint8)
+                buf.set_output(frame)
+            elif state.mode == "clips":
+                frame = clip_player.get_frame(state.width, state.height)
+                if frame is None:
+                    frame = _text_frame("NO CLIPS FOUND", "Add .mp4 files to clips/ folder")
+                buf.set_output(frame)
             elif state.mode == "camera":
                 frame = buf.get_input()
                 if frame is None or not buf.has_recent_input():
-                    frame = _text_frame("WAITING FOR CAMERA", "Run sender script on your PC")
+                    # Auto-cycle patterns as fallback when no camera
+                    frame = pattern_engine.generate(
+                        state.pattern_type, t, state.speed, state.intensity,
+                    )
                 else:
                     frame = cv2.resize(frame, (state.width, state.height))
                     if state.camera_effect == "roast":
@@ -155,23 +238,29 @@ def _processing_loop():
                 buf.set_output(frame)
             else:
                 buf.set_output(_text_frame("PARTY CAM"))
-        except Exception as exc:
+        except Exception:
             import traceback
             traceback.print_exc()
-            buf.set_output(_text_frame("ERROR", str(exc)[:60]))
+            buf.set_output(_text_frame("ERROR"))
+
+        # Push to RTSP
+        if rtsp:
+            raw = buf.get_output_raw()
+            if raw is not None:
+                rtsp.send_frame(raw)
 
         t += frame_time * state.speed
 
-        # Auto-cycle
+        # Auto-cycle: cycle within whichever mode we're in
         if state.auto_cycle:
             now = time.time()
             if now - last_cycle > state.auto_cycle_interval:
-                if state.mode == "camera":
-                    cycle_idx = (cycle_idx + 1) % len(CAMERA_EFFECTS)
-                    state.camera_effect = CAMERA_EFFECTS[cycle_idx]
+                if state.mode == "camera" and buf.has_recent_input():
+                    cam_cycle_idx = (cam_cycle_idx + 1) % len(CAMERA_EFFECTS)
+                    state.camera_effect = CAMERA_EFFECTS[cam_cycle_idx]
                 else:
-                    cycle_idx = (cycle_idx + 1) % len(PATTERN_TYPES)
-                    state.pattern_type = PATTERN_TYPES[cycle_idx]
+                    pat_cycle_idx = (pat_cycle_idx + 1) % len(PATTERN_TYPES)
+                    state.pattern_type = PATTERN_TYPES[pat_cycle_idx]
                 last_cycle = now
 
         elapsed = time.time() - loop_start
@@ -184,7 +273,7 @@ def _processing_loop():
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    global effect_engine, pattern_engine, roast_engine
+    global effect_engine, pattern_engine, roast_engine, clip_player
 
     effect_engine = EffectEngine(state.width, state.height)
     pattern_engine = PatternEngine(state.width, state.height)
@@ -194,11 +283,27 @@ async def lifespan(_app: FastAPI):
     roast_engine = RoastEngine(api_key if api_key else None, model_name)
     print(f"[startup] Gemini {'configured' if api_key else 'not set — roast uses fallback text'}")
 
-    thread = threading.Thread(target=_processing_loop, daemon=True)
+    clip_player = ClipPlayer("/app/clips")
+    print(f"[startup] Clip player: {clip_player.clip_count()} clips found")
+
+    # RTSP streamer
+    rtsp_url = os.environ.get("RTSP_URL", "")
+    rtsp = None
+    if rtsp_url:
+        rtsp = RTSPStreamer(
+            rtsp_url, state.width, state.height,
+            int(os.environ.get("TARGET_FPS", 60)),
+        )
+        rtsp.start()
+
+    thread = threading.Thread(target=_processing_loop, args=(rtsp,), daemon=True)
     thread.start()
     print("[startup] Processing loop running")
 
     yield
+
+    if rtsp:
+        rtsp.stop()
     print("[shutdown] done")
 
 
@@ -266,7 +371,7 @@ async def mjpeg_stream():
                         b"--frame\r\n"
                         b"Content-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
                     )
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.005)
 
     return StreamingResponse(
         generate(),
@@ -290,5 +395,7 @@ async def root():
 <html><body style="background:#111;color:#fff;font-family:sans-serif;text-align:center;padding:60px">
 <h1 style="font-size:3em">&#127881; Party Camera</h1>
 <p style="margin:30px"><a href="/control" style="color:#0ff;font-size:1.5em">&#128241; Control Panel</a></p>
-<p style="margin:30px"><a href="/projector" style="color:#f0f;font-size:1.5em">&#128253; Projector View</a></p>
+<p style="margin:30px"><a href="/projector" style="color:#f0f;font-size:1.5em">&#128253; Projector View (MJPEG)</a></p>
+<p style="margin:15px;color:#888">RTSP: rtsp://&lt;server-ip&gt;:8554/party</p>
+<p style="margin:15px;color:#888">HLS: http://&lt;server-ip&gt;:8888/party</p>
 </body></html>"""
