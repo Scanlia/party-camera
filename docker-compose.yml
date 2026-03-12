@@ -1,0 +1,13 @@
+services:
+  party-camera:
+    build: .
+    container_name: party-camera
+    ports:
+      - "8090:8080"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - STREAM_WIDTH=${STREAM_WIDTH:-1280}
+      - STREAM_HEIGHT=${STREAM_HEIGHT:-720}
+      - TARGET_FPS=${TARGET_FPS:-25}
+    restart: unless-stopped

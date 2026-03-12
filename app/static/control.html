@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Party Cam Control</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0a0a0f;color:#eee;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+     padding:12px;padding-bottom:60px;-webkit-tap-highlight-color:transparent;user-select:none}
+h1{text-align:center;font-size:1.6em;padding:10px 0 4px;background:linear-gradient(90deg,#f0f,#0ff);
+   -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.status{text-align:center;color:#888;font-size:.85em;margin-bottom:8px}
+.status span{color:#0ff;font-weight:bold}
+.preview{text-align:center;margin:8px 0}
+.preview img{width:100%;max-width:400px;border-radius:8px;border:2px solid #222}
+section{margin:14px 0}
+section h2{font-size:.95em;color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;
+           padding-left:4px;border-left:3px solid #f0f}
+section.patterns h2{border-left-color:#0ff}
+section.controls h2{border-left-color:#ff0}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.grid button{background:#1a1a2e;border:2px solid #2a2a3e;border-radius:10px;padding:10px 4px;
+             color:#ccc;font-size:.75em;cursor:pointer;transition:all .15s;display:flex;
+             flex-direction:column;align-items:center;gap:4px;min-height:64px}
+.grid button .emoji{font-size:1.5em}
+.grid button:active{transform:scale(.93)}
+.grid button.active{border-color:#0ff;background:#0d2f3f;color:#fff;box-shadow:0 0 12px #0ff3}
+.grid button.active-pattern{border-color:#f0f;background:#2f0d3f;color:#fff;box-shadow:0 0 12px #f0f3}
+.mode-bar{display:flex;gap:8px;margin:10px 0}
+.mode-bar button{flex:1;padding:12px;border:2px solid #333;border-radius:10px;background:#1a1a2e;
+                 color:#aaa;font-size:1em;font-weight:bold;cursor:pointer;transition:all .15s}
+.mode-bar button.active{border-color:#ff0;background:#2f2f0d;color:#ff0;box-shadow:0 0 10px #ff03}
+.mode-bar button:active{transform:scale(.95)}
+.slider-row{display:flex;align-items:center;gap:10px;margin:8px 0}
+.slider-row label{width:70px;font-size:.85em;color:#aaa}
+.slider-row input[type=range]{flex:1;accent-color:#0ff}
+.slider-row .val{width:36px;text-align:right;font-size:.85em;color:#0ff}
+.action-bar{display:flex;gap:8px;margin:10px 0}
+.action-bar button{flex:1;padding:12px;border-radius:10px;border:2px solid #333;
+                   background:#1a1a2e;color:#ccc;font-size:.9em;cursor:pointer;transition:all .15s}
+.action-bar button.on{border-color:#f0f;background:#2f0d2f;color:#f0f}
+.action-bar button:active{transform:scale(.95)}
+</style>
+</head>
+<body>
+<h1>&#127881; PARTY CAM</h1>
+<div class="status">Mode: <span id="modeLabel">—</span> &bull; Effect: <span id="fxLabel">—</span></div>
+<div class="preview"><img id="preview" alt="preview"></div>
+
+<div class="mode-bar">
+  <button id="modeCamera" onclick="setMode('camera')">&#128249; Camera</button>
+  <button id="modePattern" onclick="setMode('pattern')">&#127744; Patterns</button>
+</div>
+
+<section class="camera-fx">
+  <h2>&#127916; Camera Effects</h2>
+  <div class="grid" id="cameraGrid"></div>
+</section>
+
+<section class="patterns">
+  <h2>&#127752; Patterns</h2>
+  <div class="grid" id="patternGrid"></div>
+</section>
+
+<section class="controls">
+  <h2>&#9881;&#65039; Controls</h2>
+  <div class="slider-row">
+    <label>Intensity</label>
+    <input type="range" id="intensity" min="0" max="100" value="70" oninput="sendSlider()">
+    <div class="val" id="intensityVal">70%</div>
+  </div>
+  <div class="slider-row">
+    <label>Speed</label>
+    <input type="range" id="speed" min="10" max="300" value="100" oninput="sendSlider()">
+    <div class="val" id="speedVal">1.0x</div>
+  </div>
+  <div class="action-bar">
+    <button id="btnCycle" onclick="toggleCycle()">&#128260; Auto Cycle</button>
+    <button id="btnBlackout" onclick="toggleBlackout()">&#11035; Blackout</button>
+  </div>
+</section>
+
+<script>
+const FX_META = {
+  none:['&#128249;','No Effect'], roast:['&#128293;','AI Roast'],
+  neon_edges:['&#128156;','Neon Edges'], kaleidoscope:['&#128302;','Kaleidoscope'],
+  color_cycle:['&#127752;','Color Cycle'], feedback:['&#128123;','Ghost Trails'],
+  wave_warp:['&#127754;','Wave Warp'], thermal:['&#127777;','Thermal'],
+  rgb_glitch:['&#128250;','RGB Glitch'], vhs:['&#128252;','VHS'],
+  deep_fry:['&#127839;','Deep Fry'], swirl:['&#127744;','Swirl'],
+  mirror_quad:['&#129528;','Mirror'], dreamscape:['&#128171;','Dreamscape'],
+  comic:['&#128165;','Comic'], pixelate:['&#129001;','Pixelate'],
+};
+const PAT_META = {
+  plasma:['&#128995;','Plasma'], hypnotic:['&#127919;','Hypnotic'],
+  fire:['&#128293;','Fire'], lava_lamp:['&#129707;','Lava Lamp'],
+  tunnel:['&#128371;','Tunnel'], fractal_spin:['&#10052;','Fractal'],
+  rainbow_wave:['&#127754;','Rainbow'], aurora:['&#127756;','Aurora'],
+  wormhole:['&#127756;','Wormhole'],
+};
+
+let st = {};
+
+function render(data) {
+  st = data;
+  document.getElementById('modeLabel').textContent = data.mode;
+  document.getElementById('fxLabel').textContent =
+    data.mode === 'camera' ? data.camera_effect : data.pattern_type;
+  // Mode buttons
+  document.getElementById('modeCamera').classList.toggle('active', data.mode==='camera');
+  document.getElementById('modePattern').classList.toggle('active', data.mode==='pattern');
+  // Camera FX buttons
+  document.querySelectorAll('#cameraGrid button').forEach(b => {
+    b.classList.toggle('active', data.camera_effect === b.dataset.fx);
+  });
+  // Pattern buttons
+  document.querySelectorAll('#patternGrid button').forEach(b => {
+    b.classList.toggle('active-pattern', data.pattern_type === b.dataset.fx);
+  });
+  // Sliders
+  document.getElementById('intensity').value = Math.round(data.intensity * 100);
+  document.getElementById('intensityVal').textContent = Math.round(data.intensity*100)+'%';
+  document.getElementById('speed').value = Math.round(data.speed * 100);
+  document.getElementById('speedVal').textContent = data.speed.toFixed(1)+'x';
+  // Action buttons
+  document.getElementById('btnCycle').classList.toggle('on', data.auto_cycle);
+  document.getElementById('btnBlackout').classList.toggle('on', data.blackout);
+}
+
+async function api(body) {
+  const r = await fetch('/api/mode', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  render(await r.json());
+}
+
+function setMode(m) { api({mode: m}); }
+function setCameraFx(fx) { api({mode:'camera', camera_effect: fx}); }
+function setPattern(p) { api({mode:'pattern', pattern_type: p}); }
+function toggleCycle() { api({auto_cycle: !st.auto_cycle}); }
+function toggleBlackout() { api({blackout: !st.blackout}); }
+
+let sliderTimer;
+function sendSlider() {
+  const i = document.getElementById('intensity').value;
+  const s = document.getElementById('speed').value;
+  document.getElementById('intensityVal').textContent = i+'%';
+  document.getElementById('speedVal').textContent = (s/100).toFixed(1)+'x';
+  clearTimeout(sliderTimer);
+  sliderTimer = setTimeout(() => api({intensity: i/100, speed: s/100}), 150);
+}
+
+// Build button grids
+function buildGrid(container, meta, handler) {
+  const grid = document.getElementById(container);
+  for (const [key,[emoji,label]] of Object.entries(meta)) {
+    const btn = document.createElement('button');
+    btn.dataset.fx = key;
+    btn.innerHTML = `<span class="emoji">${emoji}</span>${label}`;
+    btn.onclick = () => handler(key);
+    grid.appendChild(btn);
+  }
+}
+buildGrid('cameraGrid', FX_META, setCameraFx);
+buildGrid('patternGrid', PAT_META, setPattern);
+
+// Init
+fetch('/api/state').then(r=>r.json()).then(render);
+
+// Preview refresh (low bandwidth snapshot)
+setInterval(() => {
+  document.getElementById('preview').src = '/api/snapshot?_=' + Date.now();
+}, 1200);
+</script>
+</body>
+</html>
