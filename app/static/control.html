@@ -42,6 +42,15 @@ section.controls h2{border-left-color:#ffd700}
                    background:#1a1a2e;color:#ccc;font-size:.9em;cursor:pointer;transition:all .15s}
 .action-bar button.on{border-color:#c9a84c;background:#2f2a0d;color:#ffd700}
 .action-bar button:active{transform:scale(.95)}
+.cam-input{display:flex;gap:8px;margin:8px 0}
+.cam-input input{flex:1;padding:10px;border-radius:8px;border:2px solid #333;background:#1a1a2e;
+                  color:#eee;font-size:.85em;font-family:monospace}
+.cam-input input:focus{border-color:#ffd700;outline:none}
+.cam-input button{padding:10px 16px;border-radius:8px;border:2px solid #333;background:#1a1a2e;
+                  color:#ccc;cursor:pointer;font-size:.85em;white-space:nowrap}
+.cam-input button:active{transform:scale(.95)}
+.cam-source{font-size:.75em;color:#666;margin-top:4px}
+.cam-source span{color:#ffd700}
 .bond-line{text-align:center;margin:6px 0;color:#444;font-size:.7em;letter-spacing:2px}
 </style>
 </head>
@@ -72,6 +81,16 @@ section.controls h2{border-left-color:#ffd700}
   <div class="grid" id="patternGrid"></div>
 </section>
 
+<section>
+  <h2>&#128247; Camera Source</h2>
+  <div class="cam-input">
+    <input type="text" id="rtspUrl" placeholder="rtsp://192.168.x.x:8554/live" spellcheck="false">
+    <button onclick="setRtspUrl()">Connect</button>
+  </div>
+  <div class="cam-source">Source: <span id="camSource">—</span></div>
+  <div style="font-size:.7em;color:#555;margin-top:4px">DJI Osmo: open Mimo app → Live View → RTSP Server. Enter the URL above.</div>
+</section>
+
 <section class="controls">
   <h2>&#9881;&#65039; Controls</h2>
   <div class="slider-row">
@@ -87,10 +106,11 @@ section.controls h2{border-left-color:#ffd700}
   <div class="action-bar">
     <button id="btnCycle" onclick="toggleCycle()">&#128260; Auto Cycle</button>
     <button id="btnBlackout" onclick="toggleBlackout()">&#11035; Blackout</button>
+    <button id="btnShadow" onclick="toggleShadow()">&#9728;&#65039; Shadow Boost</button>
   </div>
 </section>
 
-<div class="bond-line">RTSP: rtsp://&lt;server&gt;:8554/party &bull; HLS: http://&lt;server&gt;:8888/party</div>
+<div class="bond-line">RTSP: rtsp://&lt;server&gt;:8554/party &bull; HLS: http://&lt;server&gt;:8889/party</div>
 
 <script>
 const BOND_FX = {
@@ -146,6 +166,9 @@ function render(data) {
   document.getElementById('speedVal').textContent = data.speed.toFixed(1)+'x';
   document.getElementById('btnCycle').classList.toggle('on', data.auto_cycle);
   document.getElementById('btnBlackout').classList.toggle('on', data.blackout);
+  document.getElementById('btnShadow').classList.toggle('on', data.shadow_boost);
+  document.getElementById('rtspUrl').value = data.camera_rtsp_url || '';
+  document.getElementById('camSource').textContent = data.camera_rtsp_url ? 'RTSP: ' + data.camera_rtsp_url : 'HTTP POST (Windows sender)';
 }
 
 async function api(body) {
@@ -158,6 +181,8 @@ function setCameraFx(fx) { api({mode:'camera', camera_effect: fx}); }
 function setPattern(p) { api({mode:'pattern', pattern_type: p}); }
 function toggleCycle() { api({auto_cycle: !st.auto_cycle}); }
 function toggleBlackout() { api({blackout: !st.blackout}); }
+function toggleShadow() { api({shadow_boost: !st.shadow_boost}); }
+function setRtspUrl() { api({camera_rtsp_url: document.getElementById('rtspUrl').value, mode: 'camera'}); }
 
 let sliderTimer;
 function sendSlider() {

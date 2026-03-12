@@ -13,6 +13,8 @@ services:
       - STREAM_HEIGHT=${STREAM_HEIGHT:-720}
       - TARGET_FPS=${TARGET_FPS:-60}
       - RTSP_URL=rtsp://mediamtx:8554/party
+      - CAMERA_SOURCE=${CAMERA_SOURCE:-http}
+      - CAMERA_RTSP_URL=${CAMERA_RTSP_URL:-}
     depends_on:
       - mediamtx
     restart: unless-stopped
@@ -22,6 +24,7 @@ services:
     container_name: party-mediamtx
     ports:
       - "8554:8554"   # RTSP
+      - "1935:1935"   # RTMP (DJI camera input)
       - "8889:8888"   # HLS (browser fallback)
     environment:
       - MTX_PROTOCOLS=tcp

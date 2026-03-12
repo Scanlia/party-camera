@@ -8,12 +8,17 @@ class PatternEngine:
     def __init__(self, width: int = 1280, height: int = 720):
         self.w = width
         self.h = height
-        x = np.linspace(-1, 1, width, dtype=np.float32)
-        y = np.linspace(-1, 1, height, dtype=np.float32)
+        # Render at half resolution for ~4x speedup, upscale at the end
+        self._rw = width // 2
+        self._rh = height // 2
+        x = np.linspace(-1, 1, self._rw, dtype=np.float32)
+        y = np.linspace(-1, 1, self._rh, dtype=np.float32)
         self.X, self.Y = np.meshgrid(x, y)
         self.R = np.sqrt(self.X ** 2 + self.Y ** 2)
         self.THETA = np.arctan2(self.Y, self.X)
         self._fire_buf = None
+        # Pre-allocated output buffer
+        self._out = np.empty((self._rh, self._rw, 3), dtype=np.uint8)
 
     def generate(self, name: str, t: float, speed: float = 1.0,
                  intensity: float = 0.7) -> np.ndarray:
@@ -22,13 +27,13 @@ class PatternEngine:
             return self._pat_plasma(t * speed, intensity)
         return fn(t * speed, intensity)
 
-    @staticmethod
-    def _to_bgr(r, g, b) -> np.ndarray:
-        return np.stack([
-            np.clip(b, 0, 255).astype(np.uint8),
-            np.clip(g, 0, 255).astype(np.uint8),
-            np.clip(r, 0, 255).astype(np.uint8),
-        ], axis=-1)
+    def _to_bgr(self, r, g, b) -> np.ndarray:
+        """Build BGR frame at half-res, then upscale to full output."""
+        out = self._out
+        out[..., 0] = np.clip(b, 0, 255).astype(np.uint8)
+        out[..., 1] = np.clip(g, 0, 255).astype(np.uint8)
+        out[..., 2] = np.clip(r, 0, 255).astype(np.uint8)
+        return cv2.resize(out, (self.w, self.h), interpolation=cv2.INTER_LINEAR)
 
     # === ORIGINAL PATTERNS ============================================
 
@@ -56,21 +61,23 @@ class PatternEngine:
         return self._to_bgr(r, g, b)
 
     def _pat_fire(self, t, intensity):
-        if self._fire_buf is None:
-            self._fire_buf = np.zeros((self.h, self.w), dtype=np.float32)
-        self._fire_buf[-2:, :] = np.random.random((2, self.w)).astype(np.float32) * intensity
+        rw, rh = self._rw, self._rh
+        if self._fire_buf is None or self._fire_buf.shape != (rh, rw):
+            self._fire_buf = np.zeros((rh, rw), dtype=np.float32)
+        self._fire_buf[-2:, :] = np.random.random((2, rw)).astype(np.float32) * intensity
         below = np.roll(self._fire_buf, -1, axis=0)
         bl = np.roll(below, -1, axis=1)
         br = np.roll(below, 1, axis=1)
         b2 = np.roll(self._fire_buf, -2, axis=0)
         self._fire_buf = (below + bl + br + b2) / 4.02
-        self._fire_buf[-2:, :] = np.random.random((2, self.w)).astype(np.float32) * intensity
+        self._fire_buf[-2:, :] = np.random.random((2, rw)).astype(np.float32) * intensity
         fire = np.clip(self._fire_buf * 255, 0, 255).astype(np.uint8)
-        return cv2.applyColorMap(fire, cv2.COLORMAP_HOT)
+        small = cv2.applyColorMap(fire, cv2.COLORMAP_HOT)
+        return cv2.resize(small, (self.w, self.h), interpolation=cv2.INTER_LINEAR)
 
     def _pat_lava_lamp(self, t, intensity):
         n_blobs = 6
-        field = np.zeros((self.h, self.w), dtype=np.float32)
+        field = np.zeros((self._rh, self._rw), dtype=np.float32)
         for i in range(n_blobs):
             bx = np.sin(t * (0.3 + i * 0.1) + i * 2.1) * 0.4
             by = np.cos(t * (0.2 + i * 0.15) + i * 1.7) * 0.45
@@ -119,11 +126,12 @@ class PatternEngine:
         v += np.sin((X + Y) * 3 + t) + np.sin(np.sqrt(X ** 2 + Y ** 2) * 5 - t * 2)
         v = v * 0.25 * intensity
         hue = ((v + 1) * 90 + t * 30) % 180
-        hsv = np.zeros((self.h, self.w, 3), dtype=np.uint8)
+        hsv = np.zeros((self._rh, self._rw, 3), dtype=np.uint8)
         hsv[..., 0] = hue.astype(np.uint8)
         hsv[..., 1] = 255
         hsv[..., 2] = np.clip((np.abs(v) + 0.3) * 255, 50, 255).astype(np.uint8)
-        return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+        small = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+        return cv2.resize(small, (self.w, self.h), interpolation=cv2.INTER_LINEAR)
 
     def _pat_aurora(self, t, intensity):
         X, Y = self.X, self.Y
@@ -168,7 +176,8 @@ class PatternEngine:
         spot = np.exp(-R ** 2 * 8) * 255 * (0.5 + 0.5 * np.sin(t * 3))
         brightness = np.clip(brightness + spot, 0, 255)
         gray = brightness.astype(np.uint8)
-        return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        small = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        return cv2.resize(small, (self.w, self.h), interpolation=cv2.INTER_LINEAR)
 
     def _pat_golden_rings(self, t, intensity):
         """Expanding golden rings — Goldeneye/Spectre vibe."""
@@ -191,10 +200,11 @@ class PatternEngine:
 
     def _pat_casino_felt(self, t, intensity):
         """Casino card table patterns — suits, chips, roulette."""
+        rw, rh = self._rw, self._rh
         X, Y = self.X, self.Y
         # Green felt base
-        frame = np.zeros((self.h, self.w, 3), dtype=np.uint8)
-        frame[..., 1] = int(60 * intensity)  # dark green
+        frame = np.zeros((rh, rw, 3), dtype=np.uint8)
+        frame[..., 1] = int(60 * intensity)
         # Diamond/grid pattern
         grid = np.sin(X * 20 + t) * np.sin(Y * 20 + t * 0.7)
         grid = (grid * 0.5 + 0.5) * intensity
@@ -204,19 +214,15 @@ class PatternEngine:
         wheel_mask = R < 0.5
         sector = ((TH + t) / (2 * np.pi) * 37).astype(int) % 37
         is_red = np.isin(sector, [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36])
-        # Red sectors
         red_mask = wheel_mask & is_red
         frame[red_mask] = [0, 0, int(200 * intensity)]
-        # Black sectors
         black_mask = wheel_mask & ~is_red & (sector > 0)
         frame[black_mask] = [int(30 * intensity), int(30 * intensity), int(30 * intensity)]
-        # Gold trim ring
         ring_mask = (R > 0.48) & (R < 0.52)
         frame[ring_mask] = [0, int(180 * intensity), int(220 * intensity)]
-        # Gold ball
         ball_angle = t * 3
         ball_r = 0.45
-        bx = int(self.w / 2 + ball_r * self.w / 2 * np.cos(ball_angle))
-        by = int(self.h / 2 + ball_r * self.h / 2 * np.sin(ball_angle))
-        cv2.circle(frame, (bx, by), 6, (200, 255, 255), -1)
-        return frame
+        bx = int(rw / 2 + ball_r * rw / 2 * np.cos(ball_angle))
+        by = int(rh / 2 + ball_r * rh / 2 * np.sin(ball_angle))
+        cv2.circle(frame, (bx, by), 4, (200, 255, 255), -1)
+        return cv2.resize(frame, (self.w, self.h), interpolation=cv2.INTER_LINEAR)
